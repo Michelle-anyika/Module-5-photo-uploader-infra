@@ -4,7 +4,7 @@ CloudFormation templates for the Photo Uploader app: multi-AZ VPC, private ECS/F
 service behind a public ALB, RDS PostgreSQL, S3 + CloudFront (OAC-restricted), ECR,
 and a CodePipeline/CodeDeploy blue-green pipeline triggered by EventBridge on ECR pushes.
 
-Application code lives in a separate repo: `photo-uploader-app`.
+Application code lives in a separate repo: [`Module-5-photo-uploader-app`](https://github.com/Michelle-anyika/Module-5-photo-uploader-app).
 
 ## Stack deploy order
 
@@ -35,7 +35,7 @@ aws cloudformation deploy --stack-name ${STACK_PREFIX}-database  --template-file
 
 aws cloudformation deploy --stack-name ${STACK_PREFIX}-iam --template-file templates/iam.yaml --region $REGION \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides GitHubOrg=<your-org> GitHubAppRepo=photo-uploader-app \
+  --parameter-overrides GitHubOrg=Michelle-anyika GitHubAppRepo=Module-5-photo-uploader-app \
     EcrRepositoryArn=$(aws cloudformation describe-stacks --stack-name ${STACK_PREFIX}-ecr --query "Stacks[0].Outputs[?OutputKey=='RepositoryArn'].OutputValue" --output text) \
     DBSecretArn=$(aws cloudformation describe-stacks --stack-name ${STACK_PREFIX}-database --query "Stacks[0].Outputs[?OutputKey=='DBSecretArn'].OutputValue" --output text) \
     PhotosBucketArn=$(aws cloudformation describe-stacks --stack-name ${STACK_PREFIX}-storage --query "Stacks[0].Outputs[?OutputKey=='PhotosBucketArn'].OutputValue" --output text) \
