@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Uploader - Fargate cluster, task definition, service (blue/green via
+  CodeDeploy) and CPU-based auto scaling (1 min / 1 desired / 4 max).
+  NOTE: once CodeDeploy takes ownership of this service's deployments, do not
+  push further stack updates that touch TaskDefinition/LoadBalancers on the
+  Service resource — let the pipeline manage those. This template only creates
+  the initial state.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-uploader
+  Environment:
+    Type: String
+    Default: prod
+  ContainerPort:
+    Type: Number
+    Default: 8000
+  DesiredCount:
+    Type: Number
+    Default: 1
+  MinCapacity:
+    Type: Number
+    Default: 1
+  MaxCapacity:
+    Type: Number
+    Default: 4
+  CpuTargetValue:
+    Type: Number
+    Default: 60
+  TaskCpu:
+    Type: String
+    Default: "256"
+  TaskMemory:
+    Type: String
+    Default: "512"
+  ImageTag:
+    Type: String
+    Default: latest
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ProjectName}-${Environment}"
+      RetentionInDays: 14
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${ProjectName}-${Environment}-cluster"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${ProjectName}-${Environment}-app"
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EcsTaskExecutionRoleArn"
+      TaskRoleArn:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EcsTaskRoleArn"
+      ContainerDefinitions:
+        - Name: app
+          Image:
+            Fn::Sub:
+              - "${RepoUri}:${ImageTag}"
+              - RepoUri:
+                  Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EcrRepositoryUri"
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: S3_BUCKET
+              Value:
+                Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PhotosBucketName"
+            - Name: CLOUDFRONT_DOMAIN
+              Value:
+                Fn::ImportValue: !Sub "${ProjectName}-${Environment}-CloudFrontDomainName"
+            - Name: DB_HOST
+              Value:
+                Fn::ImportValue: !Sub "${ProjectName}-${Environment}-DBEndpointAddress"
+            - Name: DB_PORT
+              Value:
+                Fn::ImportValue: !Sub "${ProjectName}-${Environment}-DBEndpointPort"
+            - Name: DB_NAME
+              Value:
+                Fn::ImportValue: !Sub "${ProjectName}-${Environment}-DBName"
+          Secrets:
+            - Name: DB_USERNAME
+              ValueFrom:
+                Fn::Sub:
+                  - "${SecretArn}:username::"
+                  - SecretArn:
+                      Fn::ImportValue: !Sub "${ProjectName}-${Environment}-DBSecretArn"
+            - Name: DB_PASSWORD
+              ValueFrom:
+                Fn::Sub:
+                  - "${SecretArn}:password::"
+                  - SecretArn:
+                      Fn::ImportValue: !Sub "${ProjectName}-${Environment}-DBSecretArn"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: app
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "${ProjectName}-${Environment}-service"
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentController:
+        Type: CODE_DEPLOY
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PrivateSubnet1Id"
+            - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PrivateSubnet2Id"
+          SecurityGroups:
+            - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EcsSecurityGroupId"
+      LoadBalancers:
+        - ContainerName: app
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-TargetGroupBlueArn"
+
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ResourceId: !Sub "service/${Cluster}/${Service.Name}"
+      ScalableDimension: ecs:service:DesiredCount
+      MinCapacity: !Ref MinCapacity
+      MaxCapacity: !Ref MaxCapacity
+
+  CpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${ProjectName}-${Environment}-cpu-scaling"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref CpuTargetValue
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-EcsClusterName"
+  ServiceName:
+    Value: !GetAtt Service.Name
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-EcsServiceName"
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition
+  LogGroupName:
+    Value: !Ref LogGroup
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-LogGroupName"

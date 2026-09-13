@@ -1,0 +1,149 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Uploader - CodeDeploy (ECS blue/green), CodePipeline (ECR image source +
+  S3 appspec/taskdef source), and the EventBridge rule that triggers the
+  pipeline whenever a new image is pushed to ECR.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-uploader
+  Environment:
+    Type: String
+    Default: prod
+  DeploymentConfigName:
+    Type: String
+    Default: CodeDeployDefault.ECSAllAtOnce
+
+Resources:
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub "${ProjectName}-${Environment}-app"
+      ComputePlatform: ECS
+
+  DeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub "${ProjectName}-${Environment}-dg"
+      DeploymentConfigName: !Ref DeploymentConfigName
+      ServiceRoleArn:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-CodeDeployServiceRoleArn"
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      BlueGreenDeploymentConfiguration:
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 5
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events: [DEPLOYMENT_FAILURE]
+      ECSServices:
+        - ClusterName:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EcsClusterName"
+          ServiceName:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EcsServiceName"
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - TargetGroups:
+              - Name:
+                  Fn::ImportValue: !Sub "${ProjectName}-${Environment}-TargetGroupBlueName"
+              - Name:
+                  Fn::ImportValue: !Sub "${ProjectName}-${Environment}-TargetGroupGreenName"
+            ProdTrafficRoute:
+              ListenerArns:
+                - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-ListenerArn"
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-pipeline"
+      RoleArn:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-CodePipelineServiceRoleArn"
+      ArtifactStore:
+        Type: S3
+        Location:
+          Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PipelineArtifactsBucketName"
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: ImageSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: ECR
+                Version: "1"
+              Configuration:
+                RepositoryName:
+                  Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EcrRepositoryName"
+                ImageTag: latest
+              OutputArtifacts:
+                - Name: SourceArtifact
+              RunOrder: 1
+            - Name: ConfigSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              Configuration:
+                S3Bucket:
+                  Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PipelineArtifactsBucketName"
+                S3ObjectKey: config/appspec-source.zip
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: ConfigArtifact
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: BlueGreenDeploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeployToECS
+                Version: "1"
+              InputArtifacts:
+                - Name: SourceArtifact
+                - Name: ConfigArtifact
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref DeploymentGroup
+                TaskDefinitionTemplateArtifact: ConfigArtifact
+                TaskDefinitionTemplatePath: taskdef.json
+                AppSpecTemplateArtifact: ConfigArtifact
+                AppSpecTemplatePath: appspec.yaml
+                Image1ArtifactName: SourceArtifact
+                Image1ContainerName: IMAGE1_NAME
+              RunOrder: 1
+
+  EcrPushRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-ecr-push-rule"
+      Description: Triggers the pipeline whenever a new image is pushed to the app ECR repository
+      EventPattern:
+        source: ["aws.ecr"]
+        detail-type: ["ECR Image Action"]
+        detail:
+          action-type: ["PUSH"]
+          result: ["SUCCESS"]
+          repository-name:
+            - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EcrRepositoryName"
+          image-tag: ["latest"]
+      Targets:
+        - Id: TriggerPipeline
+          Arn: !Sub "arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}"
+          RoleArn:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EventBridgeInvokeRoleArn"
+
+Outputs:
+  CodeDeployApplicationName:
+    Value: !Ref CodeDeployApplication
+  DeploymentGroupName:
+    Value: !Ref DeploymentGroup
+  PipelineName:
+    Value: !Ref Pipeline

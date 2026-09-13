@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Uploader - S3 buckets for image storage and for pipeline/deployment artifacts.
+  The photos bucket blocks all public access; it is only reachable via CloudFront OAC.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-uploader
+  Environment:
+    Type: String
+    Default: prod
+
+Resources:
+  PhotosBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-photos-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET]
+            AllowedOrigins: ["*"]
+            AllowedHeaders: ["*"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-photos"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-pipeline-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-pipeline-artifacts"
+
+Outputs:
+  PhotosBucketName:
+    Value: !Ref PhotosBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PhotosBucketName"
+  PhotosBucketArn:
+    Value: !GetAtt PhotosBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PhotosBucketArn"
+  PhotosBucketRegionalDomainName:
+    Value: !GetAtt PhotosBucket.RegionalDomainName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PhotosBucketRegionalDomainName"
+  PipelineArtifactsBucketName:
+    Value: !Ref PipelineArtifactsBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PipelineArtifactsBucketName"
+  PipelineArtifactsBucketArn:
+    Value: !GetAtt PipelineArtifactsBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PipelineArtifactsBucketArn"

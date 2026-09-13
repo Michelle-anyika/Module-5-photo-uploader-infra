@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Uploader - Public Application Load Balancer with blue/green target groups
+  for CodeDeploy-managed ECS deployments.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-uploader
+  Environment:
+    Type: String
+    Default: prod
+  ContainerPort:
+    Type: Number
+    Default: 8000
+
+Resources:
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-alb"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PublicSubnet1Id"
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PublicSubnet2Id"
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-AlbSecurityGroupId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-alb"
+
+  TargetGroupBlue:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-tg-blue"
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-VpcId"
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+
+  TargetGroupGreen:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-tg-green"
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-VpcId"
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupBlue
+
+Outputs:
+  AlbArn:
+    Value: !Ref ALB
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-AlbArn"
+  AlbDnsName:
+    Value: !GetAtt ALB.DNSName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-AlbDnsName"
+  ListenerArn:
+    Value: !Ref Listener
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ListenerArn"
+  TargetGroupBlueArn:
+    Value: !Ref TargetGroupBlue
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TargetGroupBlueArn"
+  TargetGroupBlueName:
+    Value: !GetAtt TargetGroupBlue.TargetGroupName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TargetGroupBlueName"
+  TargetGroupGreenArn:
+    Value: !Ref TargetGroupGreen
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TargetGroupGreenArn"
+  TargetGroupGreenName:
+    Value: !GetAtt TargetGroupGreen.TargetGroupName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TargetGroupGreenName"

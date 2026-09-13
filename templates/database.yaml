@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Uploader - RDS PostgreSQL (db.t3 family) in private subnets, with
+  credentials generated and stored in Secrets Manager (never hardcoded).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-uploader
+  Environment:
+    Type: String
+    Default: prod
+  DBName:
+    Type: String
+    Default: photodb
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+  MultiAZ:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for RDS
+      SubnetIds:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PrivateSubnet1Id"
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PrivateSubnet2Id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-subnet-group"
+
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-db-credentials"
+      Description: Master credentials for the photo-uploader PostgreSQL database
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "photoadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\'
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: postgres
+      EngineVersion: "16"
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      DBName: !Ref DBName
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DBSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DBSecret}:SecretString:password}}"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-RdsSecurityGroupId"
+      MultiAZ: !Ref MultiAZ
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      BackupRetentionPeriod: 7
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-postgres"
+
+  DBSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
+
+Outputs:
+  DBEndpointAddress:
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-DBEndpointAddress"
+  DBEndpointPort:
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-DBEndpointPort"
+  DBName:
+    Value: !Ref DBName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-DBName"
+  DBSecretArn:
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-DBSecretArn"
